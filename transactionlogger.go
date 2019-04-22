@@ -1,7 +1,6 @@
 package transactionlogger
 
 import (
-	"flag"
 	"fmt"
 	"log/syslog"
 	"os"
@@ -69,11 +68,7 @@ func ParseLoggerUrl(url string) (logger LoggerParameters, e error) {
 // "rsyslog://127.0.0.1" - dial the rsyslog
 // "file:///var/log/pdns-recursor/dns_activity.log" - write to file
 // also "stdout", "stderr" are supported
-func New() (transactionLogger Publisher, msg string) {
-	envTransactionLogger := os.Getenv("TRANSACTION_LOGGER")
-	if len(envTransactionLogger) == 0 {
-		flag.StringVar(&envTransactionLogger, "logger", "dummy", "Transaction logger. Examples rsyslog://127.0.0.1\nfile:///var/log/pdns-recursor/dns_activity.log\nstdout")
-	}
+func New(envTransactionLogger string, useUdp bool) (transactionLogger Publisher, msg string) {
 	transactionLoggerParams, err := ParseLoggerUrl(envTransactionLogger)
 	if err != nil {
 		msg = fmt.Sprintf("Failed to parse activity log URL '%s'. Using default: sink", envTransactionLogger)
@@ -87,7 +82,7 @@ func New() (transactionLogger Publisher, msg string) {
 
 	switch transactionLoggerParams.Protocol {
 	case "rsyslog":
-		transactionLogger, err = NewRsyslog(logChSize, transactionLoggerParams.Host, transactionLoggerParams.Port, "")
+		transactionLogger, err = NewRsyslog(logChSize, transactionLoggerParams.Host, transactionLoggerParams.Port, "", useUdp)
 		if err != nil {
 			msg = fmt.Sprintf("Failed to dial rsyslog %s:%d %v", transactionLoggerParams.Host, transactionLoggerParams.Port, err)
 		} else {
@@ -143,12 +138,10 @@ func NewDummy() Publisher {
 	return publisher
 }
 
-func NewRsyslog(logChSize int, host string, port int, tag string) (Publisher, error) {
+func NewRsyslog(logChSize int, host string, port int, tag string, useUdp bool) (Publisher, error) {
 	raddr := fmt.Sprintf("%s:%d", host, port)
-	isUdp := false
-	flag.BoolVar(&isUdp, "--udp", false, "use UDP when connecting to rsyslog")
 	protocol := "tcp"
-	if isUdp {
+	if useUdp {
 		protocol = "udp"
 	}
 	logwriter, err := syslog.Dial(protocol, raddr, syslog.LOG_DEBUG, tag)
@@ -174,13 +167,13 @@ type Shippable interface {
 type PublisherDummy struct {
 }
 
-func (this *PublisherDummy) Push(s string) {
+func (p *PublisherDummy) Push(s string) {
 }
 
 type PublisherDebug struct {
 }
 
-func (this *PublisherDebug) Push(s string) {
+func (p *PublisherDebug) Push(s string) {
 	fmt.Printf("Transaction %s", s)
 }
 
@@ -191,15 +184,16 @@ type PublisherRsyslog struct {
 	writer *syslog.Writer
 }
 
-func (this *PublisherRsyslog) Push(s string) {
-	this.ch <- s
+func (p *PublisherRsyslog) Push(s string) {
+	if  len(
+	p.ch <- s
 }
 
-func (this *PublisherRsyslog) start() {
+func (p *PublisherRsyslog) start() {
 	go func() {
 		for {
-			s := <-this.ch
-			this.writer.Debug(s + "\n")
+			s := <-p.ch
+			p.writer.Debug(s + "\n")
 		}
 	}()
 }
@@ -209,15 +203,15 @@ type PublisherStdout struct {
 	ch       chan string
 }
 
-func (this *PublisherStdout) Push(s string) {
-	this.ch <- s
+func (p *PublisherStdout) Push(s string) {
+	p.ch <- s
 }
 
-func (this *PublisherStdout) start() {
+func (p *PublisherStdout) start() {
 	go func() {
 		for {
-			s := <-this.ch
-			this.outputIo.WriteString(s + "\n")
+			s := <-p.ch
+			p.outputIo.WriteString(s + "\n")
 		}
 	}()
 }
