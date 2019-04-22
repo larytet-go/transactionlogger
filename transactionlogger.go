@@ -68,21 +68,16 @@ func ParseLoggerUrl(url string) (logger LoggerParameters, e error) {
 // "rsyslog://127.0.0.1" - dial the rsyslog
 // "file:///var/log/pdns-recursor/dns_activity.log" - write to file
 // also "stdout", "stderr" are supported
-func New(envTransactionLogger string, useUdp bool) (transactionLogger Publisher, msg string) {
+func New(maxDepth int, envTransactionLogger string, useUdp bool) (transactionLogger Publisher, msg string) {
 	transactionLoggerParams, err := ParseLoggerUrl(envTransactionLogger)
 	if err != nil {
 		msg = fmt.Sprintf("Failed to parse activity log URL '%s'. Using default: sink", envTransactionLogger)
 		transactionLoggerParams.Protocol = "dummy"
 	}
 
-	logChSize := 32 * 1024 // burst tolerance in the async logs
-	if v := os.Getenv("TRANSACTION_LOGGER_CH_SIZE"); v != "" {
-		logChSize, _ = strconv.Atoi(v)
-	}
-
 	switch transactionLoggerParams.Protocol {
 	case "rsyslog":
-		transactionLogger, err = NewRsyslog(logChSize, transactionLoggerParams.Host, transactionLoggerParams.Port, "", useUdp)
+		transactionLogger, err = NewRsyslog(maxDepth, transactionLoggerParams.Host, transactionLoggerParams.Port, "", useUdp)
 		if err != nil {
 			msg = fmt.Sprintf("Failed to dial rsyslog %s:%d %v", transactionLoggerParams.Host, transactionLoggerParams.Port, err)
 		} else {
@@ -95,10 +90,10 @@ func New(envTransactionLogger string, useUdp bool) (transactionLogger Publisher,
 		transactionLogger = NewDebug()
 		msg = "Transaction log goes to the service logger"
 	case "stdout":
-		transactionLogger = NewStdout(logChSize, os.Stdout)
+		transactionLogger = NewStdout(maxDepth, os.Stdout)
 		msg = "Transaction log goes to the stdout"
 	case "stderr":
-		transactionLogger = NewStdout(logChSize, os.Stderr)
+		transactionLogger = NewStdout(maxDepth, os.Stderr)
 		msg = "Transaction log goes to the stderr"
 	case "file":
 		filename := transactionLoggerParams.Host
@@ -112,7 +107,7 @@ func New(envTransactionLogger string, useUdp bool) (transactionLogger Publisher,
 			msg = fmt.Sprintf("Failed to open transaction log file '%s' for writing", filename)
 			transactionLogger = NewDummy()
 		} else {
-			transactionLogger = NewStdout(logChSize, f)
+			transactionLogger = NewStdout(maxDepth, f)
 			msg = fmt.Sprintf("Transaction log goes to the file '%s'", filename)
 		}
 	}
@@ -120,8 +115,12 @@ func New(envTransactionLogger string, useUdp bool) (transactionLogger Publisher,
 	return transactionLogger, msg
 }
 
-func NewStdout(logChSize int, outputIo *os.File) Publisher {
-	publisher := &PublisherStdout{ch: make(chan string, logChSize), outputIo: outputIo}
+func NewStdout(maxDepth int, outputIo *os.File) Publisher {
+	publisher := &PublisherStdout{
+		ch:       make(chan string, maxDepth),
+		outputIo: outputIo,
+		maxDepth: maxDepth,
+	}
 	publisher.start()
 	return publisher
 }
@@ -138,7 +137,7 @@ func NewDummy() Publisher {
 	return publisher
 }
 
-func NewRsyslog(logChSize int, host string, port int, tag string, useUdp bool) (Publisher, error) {
+func NewRsyslog(maxDepth int, host string, port int, tag string, useUdp bool) (Publisher, error) {
 	raddr := fmt.Sprintf("%s:%d", host, port)
 	protocol := "tcp"
 	if useUdp {
@@ -150,10 +149,11 @@ func NewRsyslog(logChSize int, host string, port int, tag string, useUdp bool) (
 	}
 
 	publisher := &PublisherRsyslog{
-		ch:     make(chan string, logChSize),
-		raddr:  raddr,
-		writer: logwriter,
-		tag:    tag,
+		ch:       make(chan string, maxDepth),
+		raddr:    raddr,
+		writer:   logwriter,
+		tag:      tag,
+		maxDepth: maxDepth,
 	}
 
 	publisher.start()
@@ -178,15 +178,17 @@ func (p *PublisherDebug) Push(s string) {
 }
 
 type PublisherRsyslog struct {
-	ch     chan string
-	raddr  string
-	tag    string
-	writer *syslog.Writer
+	ch       chan string
+	raddr    string
+	tag      string
+	writer   *syslog.Writer
+	maxDepth int
 }
 
 func (p *PublisherRsyslog) Push(s string) {
-	if  len(
-	p.ch <- s
+	if len(p.ch) < p.maxDepth {
+		p.ch <- s
+	}
 }
 
 func (p *PublisherRsyslog) start() {
@@ -201,17 +203,20 @@ func (p *PublisherRsyslog) start() {
 type PublisherStdout struct {
 	outputIo *os.File
 	ch       chan string
+	maxDepth int
 }
 
 func (p *PublisherStdout) Push(s string) {
-	p.ch <- s
+	if len(p.ch) < p.maxDepth {
+		p.ch <- s
+	}
 }
 
 func (p *PublisherStdout) start() {
 	go func() {
 		for {
 			s := <-p.ch
-			p.outputIo.WriteString(s + "\n")
+			p.outputIo.WriteString(s + "\r\n")
 		}
 	}()
 }
