@@ -69,7 +69,7 @@ func ParseLoggerUrl(url string) (logger LoggerParameters, e error) {
 // "rsyslog://127.0.0.1" - dial the rsyslog
 // "file:///var/log/pdns-recursor/dns_activity.log" - write to file
 // also "stdout", "stderr" are supported
-func CreatePublisher() (transactionLogger Publisher, msg string) {
+func New() (transactionLogger Publisher, msg string) {
 	envTransactionLogger := os.Getenv("TRANSACTION_LOGGER")
 	if len(envTransactionLogger) == 0 {
 		flag.StringVar(&envTransactionLogger, "logger", "dummy", "Transaction logger. Examples rsyslog://127.0.0.1\nfile:///var/log/pdns-recursor/dns_activity.log\nstdout")
