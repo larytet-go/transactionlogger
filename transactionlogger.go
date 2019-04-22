@@ -9,7 +9,7 @@ import (
 )
 
 type Publisher interface {
-	Push(s string)
+	Push(s string) bool
 }
 
 type LoggerParameters struct {
@@ -62,7 +62,6 @@ func ParseLoggerUrl(url string) (logger LoggerParameters, e error) {
 	return logger, fmt.Errorf("Failed to parse %s", url)
 }
 
-// Get environment variable TRANSACTION_LOGGER
 // An empty string means "dummy" log - drop the activity log
 // "debug" - use debug log
 // "rsyslog://127.0.0.1" - dial the rsyslog
@@ -167,14 +166,16 @@ type Shippable interface {
 type PublisherDummy struct {
 }
 
-func (p *PublisherDummy) Push(s string) {
+func (p *PublisherDummy) Push(s string) bool {
+	return true
 }
 
 type PublisherDebug struct {
 }
 
-func (p *PublisherDebug) Push(s string) {
+func (p *PublisherDebug) Push(s string) bool {
 	fmt.Printf("Transaction %s", s)
+	return true
 }
 
 type PublisherRsyslog struct {
@@ -185,9 +186,12 @@ type PublisherRsyslog struct {
 	maxDepth int
 }
 
-func (p *PublisherRsyslog) Push(s string) {
+func (p *PublisherRsyslog) Push(s string) bool {
 	if len(p.ch) < p.maxDepth {
 		p.ch <- s
+		return true
+	} else {
+		return false
 	}
 }
 
@@ -195,7 +199,9 @@ func (p *PublisherRsyslog) start() {
 	go func() {
 		for {
 			s := <-p.ch
-			p.writer.Debug(s + "\n")
+			if err := p.writer.Debug(s + "\n");err != nil {
+				fmt.Errorf("Failed to write to syslog %v\n", err)
+			}
 		}
 	}()
 }
@@ -206,9 +212,12 @@ type PublisherStdout struct {
 	maxDepth int
 }
 
-func (p *PublisherStdout) Push(s string) {
+func (p *PublisherStdout) Push(s string) bool {
 	if len(p.ch) < p.maxDepth {
 		p.ch <- s
+		return true
+	} else {
+		return false
 	}
 }
 
